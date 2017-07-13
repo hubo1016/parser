@@ -101,7 +101,7 @@ optional_space = placeholder(r"[ \t]*")
 space_newline = placeholder(r"[ \t\n\r]+")
 optional_space_newline = placeholder(r"[ \t\n\r]*")
 newline = placeholder(r"\r\n?|\n")
-
+escaped_optional_space = placeholder(r"[ \t]*(?:\\(?:\r\n?|\n)[ \t]*)*")
 
 class Sequence(Structure):
     """
