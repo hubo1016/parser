@@ -4,7 +4,7 @@ e.g.
 
 tuple := expression ["," expression]*
 """
-from __future__ import unicode_literals
+from __future__ import unicode_literals, print_function
 from .parser import *
 import re
 import unicodedata
@@ -32,7 +32,7 @@ def default_escaped_mapper(s):
 
 def string_type(delimiter, name = 'str',
                 escaped_regexp=r'[uU][a-fA-F0-9]{4}|x[a-fA-F0-9]{2}|[0-7]{1,3}|N\{[^\}\r\n\'\"]+\}|\r?\n|\r|[^\r\nuUxN0-7]',
-                escaped_mapper=default_escaped_mapper)
+                escaped_mapper=default_escaped_mapper):
     normal_string = Token('[^\\\\' + re.escape(delimiter) + ']+',
                         name="normalstr", mapper=lambda m,t: m.group(0))
     escaped_string = Token(r'\\(?:' + escaped_regexp + ')', name="escapedstr",
@@ -62,7 +62,7 @@ regexp = Switch(string_type(r'/', name='regexp'), string_type(r"~", name='regexp
                                                                     escaped_mapper=lambda s: s)),
                             mapper=lambda m,t: t[1]))
 
-expression = Sequence()
+expression = Sequence(name="switch")
 
 multi_mark = Switch(Token(r'[\*\+]', mapper=lambda m,t: (t, m.group(0)), name="multi"), allow_nomatch=True)
 
@@ -96,7 +96,7 @@ expression_flattern.bind(expression_sequence, Switch(Sequence(placeholder('|', T
                          allow_nomatch=True),
                          flattern=True)
 
-expression.bind(expression_flattern, name="switch")
+expression.bind(expression_flattern)
 
 rule = Sequence(escaped_optional_space,
                 identifier,
@@ -104,4 +104,22 @@ rule = Sequence(escaped_optional_space,
                 placeholder("::=", True),
                 escaped_optional_space,
                 expression,
+                newline,
                 name="rule")
+
+document_flattern = Sequence()
+
+document_flattern.bind(Sequence(Switch(rule, newline), escaped_optional_space, flattern=True), Switch(document_flattern, allow_nomatch=True), flattern=True)
+
+document = Sequence(escaped_optional_space, document_flattern, name='document')
+
+if __name__ == '__main__':
+    import sys
+    from pprint import pprint
+    with open(sys.argv[1], 'r') as f:
+        try:
+            pprint(document.fullparse(f.read()))
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)

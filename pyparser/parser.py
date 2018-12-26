@@ -3,12 +3,37 @@ Basic Parser structures
 """
 import re
 import reprlib
+import textwrap
 
 class ParserException(Exception):
     def __init__(self, message, source, position):
-        super().__init__(self, message)
+        super().__init__(message)
         self.source = source
         self.position = position
+    def __str__(self):
+        begin = self.position - 5
+        if begin < 0:
+            begin = 0
+        end = self.position + 30
+        line_no = len(self.source[:self.position+1].splitlines(True))
+        quote = self.source[begin:end]
+        lines = quote.splitlines(True)
+        c = 0
+        for i,l in enumerate(lines):
+            c += len(l)
+            if c > self.position:
+                s = c - self.position
+                if s > 10:
+                    s = 10
+                lines.insert(i + 1, ('^' * s).rjust(self.position + len(l) - c))
+                break
+        if begin > 0:
+            lines.insert(0, '...\n')
+        if end < len(self.source):
+            lines.append('...\n')
+        quote_format = ''.join('  ' + l for l in lines)
+        return super().__str__() + '\nAt line {line_no}: \n{quote_format}'.\
+                format(line_no=line_no, quote_format=quote_format)
 
 
 class ParserNotMatchException(ParserException):
@@ -34,7 +59,7 @@ class Structure(object):
     def __repr__(self):
         return self._base_repr(repr(self.name) if self.name is not None else '')
     
-    def parse(self, source, start, end):
+    def parse(self, source, start=0, end=None):
         """
         Return (parsed, next_start) when the input string can be parsed into
         this structure, where parsed is the returning object, and next_start
@@ -42,15 +67,17 @@ class Structure(object):
         """
         raise NotImplementedError
 
-    def fullparse(self, source, start, end):
+    def fullparse(self, source, start=0, end=None):
         """
         Return (parsed, next_start) when the input string can be fully parsed
         into this structure without remaining data. next_start should be the same
         as end.
         """
         parsed, next_start = self.parse(source, start, end)
+        if end is None:
+            end = len(source)
         if next_start != end:
-            raise ParserFatalException("extra unparsed data", source, end)
+            raise ParserFatalException("extra unparsed data", source, next_start)
         return (parsed, next_start)
 
 
@@ -85,8 +112,11 @@ class Token(Structure):
         self._pattern = re.compile(pattern, flags)
         self._mapper = mapper
     
-    def parse(self, source, start, end):
-        m = self._pattern.match(source, start, end)
+    def parse(self, source, start=0, end=None):
+        if end is None:
+            m = self._pattern.match(source, start)
+        else:
+            m = self._pattern.match(source, start, end)
         if not m:
             raise ParserNotMatchException("cannot match " + repr(self), source, start)
         return (_safecall(self._mapper, m, self), m.end())
@@ -123,7 +153,7 @@ class Sequence(Structure):
         self._mapper = mapper
         self._flattern = flattern
         
-    def parse(self, source, start, end):
+    def parse(self, source, start=0, end=None):
         next_pos = start
         return_obj = []
         for structure in self._seqs:
@@ -132,10 +162,10 @@ class Sequence(Structure):
                 return_obj.append(obj)
         return (_safecall(self._mapper, self.flattern(return_obj), self), next_pos)
 
-    def fullparse(self, source, start, end):
+    def fullparse(self, source, start=0, end=None):
         next_pos = start
         return_obj = []
-        for structure in self._seqs[-1]:
+        for structure in self._seqs[:-1]:
             obj, next_pos = structure.parse(source, start, end)
             if obj is not None:
                 return_obj.append(obj)
@@ -147,7 +177,7 @@ class Sequence(Structure):
     @reprlib.recursive_repr()
     def __repr__(self):
         if self.name is None:
-            return self._base_repr(reprlib.repr(self._seqs))
+            return self._base_repr(repr(self._seqs))
         else:
             return super().__repr__()
 
@@ -186,27 +216,32 @@ class Switch(Structure):
     def remove(self, structure):
         self._switches.remove(structure)
 
-    def parse(self, source, start, end):
+    def parse(self, source, start=0, end=None):
+        all_excs = []
         for s in self._switches:
             try:
                 obj, next_start = s.parse(source, start, end)
-            except ParserNotMatchException:
-                pass
+            except ParserNotMatchException as exc:
+                all_excs.append(exc)
             else:
                 break
         else:
             if self._allow_nomatch:
                 return (None, start)
             else:
-                raise ParserNotMatchException("No valid match for " repr(self), source, start, end)
+                raise ParserNotMatchException("No valid match for " + repr(self) + \
+                                              ", all errors: \n" + \
+                                              textwrap.indent('\n\n'.join(str(e) for e in all_excs), '  '),
+                                              source, start)
         return (_safecall(self._mapper, obj, s, self), next_start)
 
-    def fullparse(self, source, start, end):
+    def fullparse(self, source, start=0, end=None):
+        all_excs = []
         for s in self._switches:
             try:
                 obj, next_start = s.fullparse(source, start, end)
-            except ParserNotMatchException:
-                pass
+            except ParserNotMatchException as exc:
+                all_excs.append(exc)
             else:
                 break
         else:
@@ -214,13 +249,19 @@ class Switch(Structure):
                 if start == end:
                     return (None, start)
                 else:
-                    raise ParserNotMatchException("No valid full match for " repr(self), source, start, end)
-            raise ParserNotMatchException("No valid full match for " repr(self), source, start, end)
+                    raise ParserNotMatchException("No valid full match for " + repr(self) + \
+                                                  ", all errors: \n" + \
+                                                  textwrap.indent('\n\n'.join(str(e) for e in all_excs), '  '),
+                                                  source, start)
+            raise ParserNotMatchException("No valid full match for " + repr(self) + \
+                                          ", all errors: \n" + \
+                                          textwrap.indent('\n\n'.join(str(e) for e in all_excs), '  '),
+                                          source, start)
         return (_safecall(self._mapper, obj, s, self), next_start)
 
     @reprlib.recursive_repr()
     def __repr__(self):
         if self.name is None:
-            return self._base_repr(reprlib.repr(self._switches))
+            return self._base_repr(repr(self._switches))
         else:
             return super().__repr__()
